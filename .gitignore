@@ -33,3 +33,10 @@ out_list_wise/
 
 merge_lora_to_full.py
 TEMP_TEST.py
+
+# Archive files
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+

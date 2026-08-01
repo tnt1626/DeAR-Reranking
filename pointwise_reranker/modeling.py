@@ -138,7 +138,10 @@ class DistillRerankerModel(nn.Module):
         if student_base.config.pad_token_id is None:
             student_base.config.pad_token_id = 0
         student = PeftModel.from_pretrained(student_base, student_model_path)
-        student = student.merge_and_unload()
+        try:
+            student = student.merge_and_unload()
+        except Exception as e:
+            logger.warning(f"Could not merge and unload PEFT model: {e}. Proceeding without merging.")
 
         teacher = None
         if use_teacher and teacher_model_path:

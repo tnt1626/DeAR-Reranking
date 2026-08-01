@@ -35,8 +35,8 @@ def main():
         data_args: DataArguments
         training_args: TrainingArguments
 
-    if training_args.local_rank > 0 or training_args.n_gpu > 1:
-        raise NotImplementedError('Multi-GPU encoding is not supported.')
+    if training_args.local_rank > 0:
+        raise NotImplementedError('Distributed Multi-GPU encoding is not supported.')
 
     # Setup logging
     logging.basicConfig(
@@ -56,13 +56,18 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = 'right'
     use_teacher =  False 
+    device_map = model_args.device_map
+    if device_map is None and training_args.n_gpu > 1:
+        device_map = "auto"
+
     model = DistillRerankerModel.load(
         student_model_path=model_args.model_name_or_path,
         teacher_model_path =model_args.teacher_model_name_or_path,
         use_teacher= use_teacher,
         cache_dir=model_args.cache_dir,
         torch_dtype=torch.float16 if training_args.fp16 else torch.float32,
-        loss_type = model_args.loss_type
+        loss_type = model_args.loss_type,
+        device_map=device_map,
     )
 
     tokenizer_teacher = AutoTokenizer.from_pretrained(
@@ -94,7 +99,8 @@ def main():
         drop_last=False,
         num_workers=training_args.dataloader_num_workers,
     )
-    model = model.to(training_args.device)
+    if device_map is None:
+        model = model.to(training_args.device)
     model.eval()
     all_results = {}
     start_time = time.time()  # Start timing inference

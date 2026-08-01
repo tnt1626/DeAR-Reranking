@@ -1,1 +1,3 @@
 rankify[all]
+pytrec-eval
+bitsandbytes

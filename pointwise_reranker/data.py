@@ -23,7 +23,7 @@ class HFRerankerTrainDataset:
 
         self.dataset = load_dataset(data_args.dataset_name,
                                     data_args.dataset_language,
-                                    data_files=data_files, use_auth_token=None)[data_args.dataset_split]#.select(range(1))
+                                    data_files=data_files, token=None)[data_args.dataset_split]#.select(range(1))
         
         self.preprocessor = RerankerTrainPreProcessor(tokenizer_student, tokenizer_teacher,
                                                       data_args.q_max_len, data_args.p_max_len)
@@ -183,7 +183,7 @@ class HFRerankerInferenceDataset:
             data_files = {data_args.dataset_split: data_files}
         self.dataset = datasets.load_dataset(data_args.dataset_name,
                                              data_args.dataset_language,
-                                             data_files=data_files, use_auth_token=None)[data_args.dataset_split]
+                                             data_files=data_files, token=None)[data_args.dataset_split]
         self.preprocessor = RerankerInferencePreProcessor(tokenizer_student, tokenizer_teacher, 
                                                           data_args.q_max_len, data_args.p_max_len)
         self.tokenizer_student = tokenizer_student

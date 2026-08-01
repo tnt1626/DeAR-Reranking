@@ -23,6 +23,7 @@ class ModelArguments:
     normalize: bool = field(default=False)
     # dtype hint
     dtype: Optional[str] = field(default="float32")
+    device_map: Optional[str] = field(default=None, metadata={"help": "Device map for HF models (e.g. 'auto')."})
 
 @dataclass
 class DataArguments:

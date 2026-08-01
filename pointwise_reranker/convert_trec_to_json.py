@@ -4,10 +4,6 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
-from pyserini.index import IndexReader
-from pyserini.search import get_topics
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Convert TREC run files to Listwise-compatible JSON."
@@ -22,6 +18,12 @@ def main():
         "--out",
         default=None,
         help="Output directory for JSON files (defaults to --path).",
+    )
+    # Directory with the original JSONL files
+    parser.add_argument(
+        "--bm25_dir",
+        default="./data/bm25_beir_dl19_20",
+        help="Directory containing the original BM25 JSONL files.",
     )
     args = parser.parse_args()
 
@@ -42,21 +44,6 @@ def main():
         "ranked_touche.json"
     ]
 
-    index_name = [
-        "msmarco-v1-passage", "msmarco-v1-passage", "beir-v1.0.0-trec-covid.flat",
-        "beir-v1.0.0-dbpedia-entity.flat", "beir-v1.0.0-trec-news.flat",
-        "beir-v1.0.0-nfcorpus.flat", "beir-v1.0.0-robust04.flat",
-        "beir-v1.0.0-scifact.flat", "beir-v1.0.0-signal1m.flat",
-        "beir-v1.0.0-webis-touche2020.flat",
-    ]
-    topic_name = [
-        "dl19-passage", "dl20", "beir-v1.0.0-trec-covid-test",
-        "beir-v1.0.0-dbpedia-entity-test", "beir-v1.0.0-trec-news-test",
-        "beir-v1.0.0-nfcorpus-test", "beir-v1.0.0-robust04-test",
-        "beir-v1.0.0-scifact-test", "beir-v1.0.0-signal1m-test",
-        "beir-v1.0.0-webis-touche2020-test",
-    ]
-
     for i, trec_name in enumerate(trec_paths):
         trec_path = in_dir / trec_name
         out_path = out_dir / output_json_path[i]
@@ -67,11 +54,40 @@ def main():
 
         try:
             print(f"\n=== [{trec_name}] ===")
-            print("Loading index...")
-            index = IndexReader.from_prebuilt_index(index_name[i])
-
-            print("Loading topics...")
-            topics = get_topics(topic_name[i])
+            dataset = trec_name.replace("ranked_", "").replace(".trec", "")
+            
+            # Load queries and contents from JSONL
+            content_cache = {}
+            query_text_cache = {}
+            jsonl_path = Path(args.bm25_dir) / f"{dataset}.jsonl"
+            if not jsonl_path.exists():
+                jsonl_path = Path(args.bm25_dir) / f"{dataset}.json"
+                
+            if jsonl_path.exists():
+                print(f"Loading document/query texts from {jsonl_path}...")
+                with jsonl_path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        item = json.loads(line)
+                        qid = str(item.get("query_id", item.get("qid", "")))
+                        docid = str(item.get("docid", item.get("doc_id", "")))
+                        query = item.get("query", "")
+                        title = item.get("title", "")
+                        text = item.get("text", "")
+                        
+                        if title:
+                            content = f"Title: {title} Content: {text}"
+                        else:
+                            content = text
+                        content = " ".join(content.split())
+                        
+                        query_text_cache[qid] = query
+                        if qid not in content_cache:
+                            content_cache[qid] = {}
+                        content_cache[qid][docid] = content
+            else:
+                print(f"⚠️  Warning: Original JSONL not found at {jsonl_path}. Query/document text will fall back to placeholder IDs.")
 
             print("Parsing TREC file...")
             results = defaultdict(list)
@@ -83,29 +99,11 @@ def main():
             print("Building Listwise-compatible JSON...")
             final_output = []
             for qid, tuples in results.items():
-                # qid may be str or numeric; try both safely
-                if qid in topics:
-                    query_text = topics[qid]["title"]
-                else:
-                    try:
-                        query_text = topics[int(qid)]["title"]
-                    except Exception:
-                        # Fallback if topics key mismatch
-                        query_text = str(qid)
-
+                query_text = query_text_cache.get(qid, str(qid))
                 query_entry = {"query": query_text, "qid": qid, "hits": []}
 
                 for rank, docid, score in sorted(tuples, key=lambda x: x[0]):
-                    raw = index.doc(docid).raw()
-                    content_json = json.loads(raw)
-
-                    if "title" in content_json:
-                        content = f"Title: {content_json['title']} Content: {content_json.get('text', '')}"
-                    else:
-                        content = content_json.get("contents", "")
-
-                    content = " ".join(content.split())
-
+                    content = content_cache.get(qid, {}).get(docid, f"Document {docid}")
                     query_entry["hits"].append({
                         "content": content,
                         "qid": qid,
@@ -123,7 +121,6 @@ def main():
             print("✅ Done.")
         except Exception as e:
             print(f"❌ Error processing {trec_name}: {e}")
-
 
 if __name__ == "__main__":
     main()

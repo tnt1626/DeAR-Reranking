@@ -61,10 +61,44 @@ def get_qrels_file(name):
         'robust04': 'beir-v1.0.0-robust04-test',
         'signal': 'beir-v1.0.0-signal1m-test',
     }
-    if not os.path.exists(name):
-        from pyserini.search import get_qrels_file
-        return get_qrels_file(name)  # download from pyserini
-    return name
+    # Resolve mapping
+    name = THE_TOPICS.get(name, name)
+    if os.path.exists(name):
+        return name
+        
+    filename = name
+    if not filename.startswith("qrels."):
+        filename = f"qrels.{filename}"
+    if not filename.endswith(".txt"):
+        filename = f"{filename}.txt"
+
+    cache_dir = os.path.expanduser("~/.cache/dear_reranker_qrels")
+    os.makedirs(cache_dir, exist_ok=True)
+    local_path = os.path.join(cache_dir, filename)
+    if os.path.exists(local_path):
+        return local_path
+
+    url = f"https://raw.githubusercontent.com/castorini/anserini-tools/master/topics-and-qrels/{filename}"
+    print(f"Downloading qrels from {url} to {local_path}...")
+    import urllib.request
+    import urllib.error
+    try:
+        urllib.request.urlretrieve(url, local_path)
+        return local_path
+    except urllib.error.HTTPError as e:
+        if e.code == 404 and filename.endswith("-test.txt"):
+            alt_filename = filename[:-9] + ".test.txt"
+            alt_url = f"https://raw.githubusercontent.com/castorini/anserini-tools/master/topics-and-qrels/{alt_filename}"
+            print(f"Retrying download with fallback URL {alt_url}...")
+            try:
+                urllib.request.urlretrieve(alt_url, local_path)
+                return local_path
+            except Exception as ex:
+                print(f"Fallback download failed: {ex}")
+        print(f"Failed to download from anserini-tools: {e}")
+        if os.path.exists(filename):
+            return filename
+        raise FileNotFoundError(f"Could not find or download qrels file {name} ({filename})")
 
 
 def remove_duplicate(response):

@@ -127,10 +127,16 @@ class HFClient(BaseLLMClient):
         dtype = dtype_map.get(cfg.torch_dtype, None)
 
         self.tokenizer = AutoTokenizer.from_pretrained(cfg.model_name_or_path, use_fast=True)
+        device_map = None
+        load_in_4bit = False
+        if cfg.device in ("auto", "cuda") and torch.cuda.is_available():
+            device_map = "auto"
+            load_in_4bit = True
+
         self.model = AutoModelForCausalLM.from_pretrained(
             cfg.model_name_or_path,
-            torch_dtype=dtype,
-            device_map={"": "cuda:0"} if (cfg.device == "auto" and torch.cuda.is_available()) else None,
+            load_in_4bit=load_in_4bit,
+            device_map=device_map,
         )
 
         # Adapters (PEFT or AdapterHub)
@@ -166,7 +172,7 @@ class HFClient(BaseLLMClient):
             self.model.config.pad_token_id = self.tokenizer.pad_token_id
 
         self.model.eval()
-        if cfg.device == "cuda" or (cfg.device == "auto" and torch.cuda.is_available()):
+        if device_map is None and (cfg.device == "cuda" or (cfg.device == "auto" and torch.cuda.is_available())):
             self.model.to("cuda")
 
     def _render(self, messages: List[Dict[str, str]]) -> str:
@@ -190,7 +196,8 @@ class HFClient(BaseLLMClient):
     @torch.inference_mode()
     def chat(self, messages: List[Dict[str, str]], **gen_kwargs) -> str:
         prompt = self._render(messages)
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+        model_device = getattr(self.model, "device", next(self.model.parameters()).device)
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(model_device)
         temperature = gen_kwargs.get("temperature", self.cfg.temperature)
         max_new_tokens = gen_kwargs.get("max_new_tokens", self.cfg.max_new_tokens)
 
