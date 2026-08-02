@@ -1,7 +1,10 @@
 # DeAR: Dual-Stage Document Reranking with Reasoning Agents via LLM Distillation
 
 > [!NOTE]
-> **Kaggle Support & Optimizations**: This fork has been optimized to run seamlessly on Kaggle's Multi-GPU (T4 x2) environment. It includes 4-bit listwise model quantization (to avoid VRAM CUDA Out-Of-Memory errors) and a fully Java-free/Pyserini-free evaluation pipeline. Please check [KAGGLE_GUIDE.md](KAGGLE_GUIDE.md) for full instructions and details on changes.
+> **Kaggle Support & Optimizations**: This fork has been optimized to run seamlessly on Kaggle's Multi-GPU (T4 x2) environment. It includes 4-bit listwise model quantization (to avoid VRAM CUDA Out-Of-Memory errors) and a fully Java-free/Pyserini-free evaluation pipeline.
+> - For setup and execution steps, see [KAGGLE_GUIDE.md](KAGGLE_GUIDE.md).
+> - For reproduced evaluation scores and a multi-stage reranking demo walkthrough, see [REPRODUCTION_RESULTS.md](REPRODUCTION_RESULTS.md).
+
 
 <div align="center">
 
