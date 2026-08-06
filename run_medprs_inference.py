@@ -2,47 +2,61 @@ import os
 import re
 import sys
 import torch
+import torch.nn as nn
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModel, BitsAndBytesConfig
 from peft import AutoPeftModelForCausalLM
 
-def load_my_state_dict(model, state_dict):
-    own_state = model.state_dict()
-    new_state_dict = {}
-    for k, v in state_dict.items():
-        name = k
-        prefixes = ["base_model.bert.", "base_model.", "model.", "bert.", "encoder."]
-        matched = False
-        if name in own_state:
-            new_state_dict[name] = v
-            matched = True
-        else:
-            for prefix in prefixes:
-                if name.startswith(prefix):
-                    sub_name = name[len(prefix):]
-                    if sub_name in own_state:
-                        new_state_dict[sub_name] = v
-                        matched = True
-                        break
-        if not matched:
-            print(f"Skipping key {k} (not in base BioBERT model state dict)")
-    info = model.load_state_dict(new_state_dict, strict=False)
-    print(f"Successfully loaded {len(new_state_dict)} keys. Missing keys: {len(info.missing_keys)}")
+class SimCPSRModel(nn.Module):
+    def __init__(self, base_model):
+        super().__init__()
+        self.base_model = base_model
+        self.linear1_1 = None
+        self.linear2_1 = None
+        self.linear_main_1 = None
+        
+    def init_heads(self, state_dict):
+        # Scan state dict for linear layers and initialize them with the correct shapes
+        for k in state_dict.keys():
+            if "linear1_1.weight" in k:
+                w = state_dict[k]
+                self.linear1_1 = nn.Linear(w.shape[1], w.shape[0])
+                print(f"Initialized linear1_1: nn.Linear({w.shape[1]}, {w.shape[0]})")
+            if "linear2_1.weight" in k:
+                w = state_dict[k]
+                self.linear2_1 = nn.Linear(w.shape[1], w.shape[0])
+                print(f"Initialized linear2_1: nn.Linear({w.shape[1]}, {w.shape[0]})")
+            if "linear_main_1.weight" in k:
+                w = state_dict[k]
+                self.linear_main_1 = nn.Linear(w.shape[1], w.shape[0])
+                print(f"Initialized linear_main_1: nn.Linear({w.shape[1]}, {w.shape[0]})")
+
+    def forward(self, input_ids, attention_mask):
+        outputs = self.base_model(input_ids=input_ids, attention_mask=attention_mask)
+        token_embeddings = outputs[0]
+        input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+        embedding = torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+        
+        if self.linear1_1 is not None:
+            embedding = self.linear1_1(embedding)
+            embedding = torch.relu(embedding)
+        if self.linear2_1 is not None:
+            embedding = self.linear2_1(embedding)
+            embedding = torch.relu(embedding)
+        if self.linear_main_1 is not None:
+            logits = self.linear_main_1(embedding)
+            return logits
+        return embedding
 
 def get_embedding(model, tokenizer, text, device):
     inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
     with torch.no_grad():
-        outputs = model(**inputs)
-    attention_mask = inputs['attention_mask']
-    token_embeddings = outputs[0]
-    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-    embedding = torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
-    return embedding.cpu().numpy()[0]
+        outputs = model(inputs['input_ids'], inputs['attention_mask'])
+    return outputs.cpu().numpy()[0]
 
 def parse_listwise_output(output_text, num_candidates):
-    # Find the line containing '>' representing the final ranking list
     ranking_line = output_text
     for line in reversed(output_text.split('\n')):
         if '>' in line:
@@ -65,6 +79,11 @@ def parse_listwise_output(output_text, num_candidates):
 
 def main():
     print("=== MEDPRS JOURNAL RECOMMENDATION INFERENCE PIPELINE ===")
+    
+    import argparse
+    parser = argparse.ArgumentParser(description="MedPRS journal recommendation inference.")
+    parser.add_argument("--num_papers", type=int, default=20, help="Number of papers to evaluate.")
+    args, unknown = parser.parse_known_args() # use parse_known_args to be safe in notebooks
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
@@ -106,26 +125,56 @@ def main():
     print(f"Loaded {len(journal_df)} journals and {len(val_df)} validation papers.")
     
     # 2. Load BioBERT Model and Checkpoint
-    print("Loading BioBERT tokenizer and model...")
+    print("Loading BioBERT tokenizer and base model...")
     biobert_model_name = "dmis-lab/biobert-v1.1"
     biobert_tokenizer = AutoTokenizer.from_pretrained(biobert_model_name)
-    biobert_model = AutoModel.from_pretrained(biobert_model_name).to(device)
+    biobert_base = AutoModel.from_pretrained(biobert_model_name)
     
     print(f"Loading checkpoint weights from {checkpoint_path}...")
-    state_dict = torch.load(checkpoint_path, map_location=device)
-    if "model_state_dict" in state_dict:
-        state_dict = state_dict["model_state_dict"]
-    load_my_state_dict(biobert_model, state_dict)
-    biobert_model.eval()
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
     
-    # 3. Compute and Cache Journal Embeddings
-    embedding_cache_path = "data_MedPRS/journal_embeddings.npy"
+    # If state dict is nested inside model_state_dict
+    state_dict = checkpoint.get("model_state_dict", checkpoint)
     
-    if os.path.exists(embedding_cache_path):
-        print(f"Found cached journal embeddings at {embedding_cache_path}. Loading...")
-        journal_embeddings = np.load(embedding_cache_path)
-        print("Journal embeddings loaded from cache successfully.")
-    else:
+    # Instantiate custom wrapper model
+    model = SimCPSRModel(biobert_base)
+    model.init_heads(state_dict)
+    
+    # Strip prefixes and load into model
+    clean_state_dict = {}
+    for k, v in state_dict.items():
+        name = k
+        # Strip model_state_dict prefix if any
+        if name.startswith("model_state_dict."):
+            name = name[17:]
+        # Strip model. prefix
+        if name.startswith("model."):
+            name = name[6:]
+        # Strip base_model.bert. to map to self.base_model
+        if name.startswith("base_model.bert."):
+            name = "base_model." + name[16:]
+            
+        clean_state_dict[name] = v
+        
+    info = model.load_state_dict(clean_state_dict, strict=False)
+    print(f"Successfully loaded checkpoint weights. Missing keys: {len(info.missing_keys)}")
+    
+    model.to(device)
+    model.eval()
+    
+    # Determine if it's a classification model (Approach C - Variant 1)
+    is_multi_class = False
+    num_classes = 0
+    if model.linear_main_1 is not None:
+        num_classes = model.linear_main_1.out_features
+        if num_classes > 1000:
+            is_multi_class = True
+            
+    print(f"Model Mode: {'Multi-Class Classification' if is_multi_class else 'Bi-Encoder Similarity'}")
+    
+    # 3. Compute Journal Embeddings in memory (Only if in Bi-Encoder similarity mode)
+    journal_embeddings = None
+    if not is_multi_class:
         print("Computing embeddings for all 1,408 journals (this runs once)...")
         journal_embeddings = []
         for idx, row in tqdm(journal_df.iterrows(), total=len(journal_df)):
@@ -134,14 +183,13 @@ def main():
             cats = row['Categories']
             text = f"Journal: {name}\nAims: {aims}\nCategories: {cats}"
             
-            emb = get_embedding(biobert_model, biobert_tokenizer, text, device)
+            # In bi-encoder mode, SimCPSRModel forward pass returns the embedding
+            emb = get_embedding(model, biobert_tokenizer, text, device)
             journal_embeddings.append(emb)
             
         journal_embeddings = np.array(journal_embeddings)
-        os.makedirs(os.path.dirname(embedding_cache_path), exist_ok=True)
-        np.save(embedding_cache_path, journal_embeddings)
-        print(f"Journal embeddings computed and saved to cache at {embedding_cache_path}.")
-    
+        print("Journal embeddings computed successfully in memory.")
+            
     # 4. Load Llama 3.1 8B Listwise Reranker in 4-bit (VRAM optimized)
     print("Loading Llama 3.1 8B Listwise Reranker...")
     llama_repo = "abdoelsayed/dear-8b-reranker-listwise-lora-v1"
@@ -166,7 +214,7 @@ def main():
     print("Llama 3.1 8B Listwise Reranker loaded successfully.")
     
     # 5. Run Evaluation on a Subset of Validation Papers
-    num_eval_papers = 20  # Adjust as needed
+    num_eval_papers = args.num_papers
     print(f"\nEvaluating the first {num_eval_papers} papers...")
     
     pointwise_top1_hits = 0
@@ -189,18 +237,35 @@ def main():
         correct_journal_info = label_to_journal.get(correct_label, {"name": "Unknown", "aims": "", "categories": ""})
         correct_journal_name = correct_journal_info["name"]
         
-        # Format query
-        paper_text = f"Title: {title}\nAbstract: {abstract}\nKeywords: {keywords}"
-        paper_emb = get_embedding(biobert_model, biobert_tokenizer, paper_text, device)
+        # Paper text formatting matching standard TAK
+        paper_text = f"{title} {abstract} {keywords}"
         
-        # Calculate Cosine Similarities
-        similarities = []
-        for j_emb in journal_embeddings:
-            sim = np.dot(paper_emb, j_emb) / (np.linalg.norm(paper_emb) * np.linalg.norm(j_emb))
-            similarities.append(sim)
+        # Calculate pointwise candidate scores
+        if is_multi_class:
+            inputs = biobert_tokenizer(paper_text, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
+            with torch.no_grad():
+                logits = model(inputs['input_ids'], inputs['attention_mask'])
+            logits = logits.cpu().numpy()[0]
             
-        # Get Top 10 candidate journals from Pointwise
-        top10_indices = np.argsort(similarities)[::-1][:10]
+            scores = []
+            for idx, r in journal_df.iterrows():
+                try:
+                    lbl = int(r['Label'])
+                    if lbl < len(logits):
+                        scores.append(logits[lbl])
+                    else:
+                        scores.append(-9999.0)
+                except Exception:
+                    scores.append(-9999.0)
+        else:
+            paper_emb = get_embedding(model, biobert_tokenizer, paper_text, device)
+            scores = []
+            for j_emb in journal_embeddings:
+                sim = np.dot(paper_emb, j_emb) / (np.linalg.norm(paper_emb) * np.linalg.norm(j_emb))
+                scores.append(sim)
+                
+        # Get Top 10 candidate journals
+        top10_indices = np.argsort(scores)[::-1][:10]
         
         pointwise_candidates = []
         for rank_idx, idx in enumerate(top10_indices):
@@ -211,7 +276,7 @@ def main():
                 "name": j_row['Journal'],
                 "aims": j_row['Aims'],
                 "categories": j_row['Categories'],
-                "score": float(similarities[idx])
+                "score": float(scores[idx])
             })
             
         # Calculate Pointwise hits
