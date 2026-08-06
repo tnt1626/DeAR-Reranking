@@ -89,6 +89,14 @@ def parse_listwise_output(output_text, num_candidates):
 def main():
     print("=== MEDPRS JOURNAL RECOMMENDATION INFERENCE PIPELINE (QWEN CO-T) ===")
     
+    # Set seed for reproducibility
+    import random
+    random.seed(42)
+    np.random.seed(42)
+    torch.manual_seed(42)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(42)
+        
     import argparse
     parser = argparse.ArgumentParser(description="MedPRS journal recommendation inference with Qwen.")
     parser.add_argument("--num_papers", type=int, default=10, help="Number of papers to evaluate.")
@@ -349,9 +357,7 @@ def main():
             out = qwen_model.generate(
                 **qwen_inputs,
                 max_new_tokens=800,  # Give Qwen plenty of space to write explanations
-                do_sample=True,
-                temperature=0.7,
-                top_p=0.9,
+                do_sample=False,     # Greedy decoding for 100% deterministic results
                 eos_token_id=qwen_tokenizer.eos_token_id,
                 pad_token_id=qwen_tokenizer.pad_token_id,
             )
