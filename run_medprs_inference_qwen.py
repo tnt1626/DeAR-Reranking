@@ -313,7 +313,10 @@ def main():
             pointwise_top10_hits += 1
             
         # 6. Construct Listwise Prompt for Qwen
-        SYSTEM_PROMPT = "You are RankLLM, an expert assistant that ranks academic journals by their suitability and domain match for publishing a given research paper."
+        SYSTEM_PROMPT = (
+            "You are RankLLM, an expert assistant that ranks academic journals by their suitability and domain match for publishing a given research paper. "
+            "You MUST analyze the candidate journals, and then write the final ranking at the very end of your response."
+        )
         
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -331,10 +334,10 @@ def main():
         post_prompt = (
             "Search Query: Rank the journals above based on their suitability for the research paper.\n"
             "Please follow these steps:\n"
-            "Step 1: Write a concise 2-sentence analysis explaining why each candidate journal fits or does not fit the research paper, based on their Aims & Scope and Categories.\n"
+            "Step 1: Write a concise 1-sentence analysis explaining why each candidate journal fits or does not fit the research paper, based on their Aims & Scope and Categories.\n"
             "Step 2: Rank the journals in descending order of suitability using the number identifiers [].\n\n"
             "Output format:\n"
-            "Write the analyses for all journals first, then at the very end of your response, print the final ranking list in this exact format:\n"
+            "Write the analyses for all journals first, then at the very end of your response, you MUST print the final ranking list in this exact format (do not skip any journals):\n"
             "[2] > [1] > [3]"
         )
         messages.append({"role": "user", "content": post_prompt})
@@ -345,7 +348,7 @@ def main():
         with torch.no_grad():
             out = qwen_model.generate(
                 **qwen_inputs,
-                max_new_tokens=512,  # Give Qwen plenty of space to write explanations
+                max_new_tokens=800,  # Give Qwen plenty of space to write explanations
                 do_sample=True,
                 temperature=0.7,
                 top_p=0.9,
