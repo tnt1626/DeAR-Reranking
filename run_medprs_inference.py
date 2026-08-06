@@ -5,7 +5,7 @@ import torch
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoModel, BitsAndBytesConfig
 from peft import AutoPeftModelForCausalLM
 
 def load_my_state_dict(model, state_dict):
@@ -105,6 +105,8 @@ def main():
     
     print(f"Loading checkpoint weights from {checkpoint_path}...")
     state_dict = torch.load(checkpoint_path, map_location=device)
+    if "model_state_dict" in state_dict:
+        state_dict = state_dict["model_state_dict"]
     load_my_state_dict(biobert_model, state_dict)
     biobert_model.eval()
     
@@ -129,9 +131,15 @@ def main():
     print("Loading Llama 3.1 8B Listwise Reranker...")
     llama_repo = "abdoelsayed/dear-8b-reranker-listwise-lora-v1"
     llama_tokenizer = AutoTokenizer.from_pretrained(llama_repo, use_fast=True)
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True
+    )
     llama_model = AutoPeftModelForCausalLM.from_pretrained(
         llama_repo,
-        load_in_4bit=True,
+        quantization_config=bnb_config,
         device_map="auto",
         trust_remote_code=True
     )
