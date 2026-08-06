@@ -118,21 +118,28 @@ def main():
     biobert_model.eval()
     
     # 3. Compute and Cache Journal Embeddings
-    print("Computing embeddings for all 1,408 journals (this runs once)...")
-    journal_embeddings = []
-    journal_texts = []
-    for idx, row in tqdm(journal_df.iterrows(), total=len(journal_df)):
-        name = row['Journal']
-        aims = row['Aims']
-        cats = row['Categories']
-        text = f"Journal: {name}\nAims: {aims}\nCategories: {cats}"
-        journal_texts.append(text)
-        
-        emb = get_embedding(biobert_model, biobert_tokenizer, text, device)
-        journal_embeddings.append(emb)
-        
-    journal_embeddings = np.array(journal_embeddings)
-    print("Journal embeddings cached successfully.")
+    embedding_cache_path = "data_MedPRS/journal_embeddings.npy"
+    
+    if os.path.exists(embedding_cache_path):
+        print(f"Found cached journal embeddings at {embedding_cache_path}. Loading...")
+        journal_embeddings = np.load(embedding_cache_path)
+        print("Journal embeddings loaded from cache successfully.")
+    else:
+        print("Computing embeddings for all 1,408 journals (this runs once)...")
+        journal_embeddings = []
+        for idx, row in tqdm(journal_df.iterrows(), total=len(journal_df)):
+            name = row['Journal']
+            aims = row['Aims']
+            cats = row['Categories']
+            text = f"Journal: {name}\nAims: {aims}\nCategories: {cats}"
+            
+            emb = get_embedding(biobert_model, biobert_tokenizer, text, device)
+            journal_embeddings.append(emb)
+            
+        journal_embeddings = np.array(journal_embeddings)
+        os.makedirs(os.path.dirname(embedding_cache_path), exist_ok=True)
+        np.save(embedding_cache_path, journal_embeddings)
+        print(f"Journal embeddings computed and saved to cache at {embedding_cache_path}.")
     
     # 4. Load Llama 3.1 8B Listwise Reranker in 4-bit (VRAM optimized)
     print("Loading Llama 3.1 8B Listwise Reranker...")
