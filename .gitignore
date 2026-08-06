@@ -40,3 +40,8 @@ TEMP_TEST.py
 *.tgz
 *.rar
 
+# MedPRS large data & checkpoints
+*.pth
+data_MedPRS/
+
+
