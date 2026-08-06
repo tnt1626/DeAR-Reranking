@@ -286,14 +286,27 @@ def main():
             print(f"  {idx+1}. {c['name']}")
         print(f"Listwise output: {output_text}")
         
+        # Split output_text into reasoning and ranking line
+        lines = output_text.split('\n')
+        reasoning_lines = []
+        ranking_line = ""
+        for line in lines:
+            if '>' in line:
+                ranking_line = line
+            else:
+                reasoning_lines.append(line)
+        reasoning = "\n".join(reasoning_lines).strip()
+        
         results_log.append({
             "paper_index": i,
             "title": title,
+            "abstract": abstract,
             "ground_truth_label": correct_label,
             "ground_truth_journal": correct_journal_name,
             "pointwise_top10": [c['name'] for c in pointwise_candidates],
             "listwise_top10": [c['name'] for c in listwise_candidates],
-            "llama_raw_output": output_text
+            "reasoning": reasoning,
+            "ranking_output": ranking_line.strip()
         })
         
     # Print overall stats
