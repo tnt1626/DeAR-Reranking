@@ -13,22 +13,23 @@ def load_my_state_dict(model, state_dict):
     new_state_dict = {}
     for k, v in state_dict.items():
         name = k
-        if name.startswith("model."):
-            name = name[6:]
+        prefixes = ["base_model.bert.", "base_model.", "model.", "bert.", "encoder."]
+        matched = False
         if name in own_state:
             new_state_dict[name] = v
+            matched = True
         else:
-            matched = False
-            for prefix in ["bert.", "encoder."]:
+            for prefix in prefixes:
                 if name.startswith(prefix):
                     sub_name = name[len(prefix):]
                     if sub_name in own_state:
                         new_state_dict[sub_name] = v
                         matched = True
                         break
-            if not matched:
-                print(f"Skipping key {k} (not in base BioBERT model state dict)")
-    model.load_state_dict(new_state_dict, strict=False)
+        if not matched:
+            print(f"Skipping key {k} (not in base BioBERT model state dict)")
+    info = model.load_state_dict(new_state_dict, strict=False)
+    print(f"Successfully loaded {len(new_state_dict)} keys. Missing keys: {len(info.missing_keys)}")
 
 def get_embedding(model, tokenizer, text, device):
     inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
