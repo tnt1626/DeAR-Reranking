@@ -41,8 +41,15 @@ def get_embedding(model, tokenizer, text, device):
     return embedding.cpu().numpy()[0]
 
 def parse_listwise_output(output_text, num_candidates):
+    # Find the line containing '>' representing the final ranking list
+    ranking_line = output_text
+    for line in reversed(output_text.split('\n')):
+        if '>' in line:
+            ranking_line = line
+            break
+            
     pattern = re.compile(r'\[(\d+)\]')
-    ranks = [int(x) for x in pattern.findall(output_text)]
+    ranks = [int(x) for x in pattern.findall(ranking_line)]
     
     valid_ranks = []
     for r in ranks:
@@ -151,7 +158,7 @@ def main():
     print("Llama 3.1 8B Listwise Reranker loaded successfully.")
     
     # 5. Run Evaluation on a Subset of Validation Papers
-    num_eval_papers = 50  # Adjust as needed
+    num_eval_papers = 20  # Adjust as needed
     print(f"\nEvaluating the first {num_eval_papers} papers...")
     
     pointwise_top1_hits = 0
@@ -227,7 +234,11 @@ def main():
         post_prompt = (
             "Search Query: Rank the journals above based on their suitability for the research paper.\n"
             "The journals should be listed in descending order of suitability using identifiers.\n"
-            "Output format strictly: [2] > [1] > [3]"
+            "Please follow the steps below:\n"
+            "Step 1. Analyze the research focus, methods, and contributions of the given paper.\n"
+            "Step 2. Match the paper's domain with each candidate journal's aims, scope, and categories.\n"
+            "Step 3. Rank the journals from most suitable to least suitable. Include all journals.\n"
+            "Output format strictly ends with: [2] > [1] > [3]"
         )
         messages.append({"role": "user", "content": post_prompt})
         
@@ -239,7 +250,7 @@ def main():
         with torch.no_grad():
             out = llama_model.generate(
                 **llama_inputs,
-                max_new_tokens=128,
+                max_new_tokens=384,
                 do_sample=True,
                 temperature=0.5,
                 top_p=0.9,
