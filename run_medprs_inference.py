@@ -33,28 +33,47 @@ class SimCPSRModel(nn.Module):
                 self.linear_main_1 = nn.Linear(w.shape[1], w.shape[0])
                 print(f"Initialized linear_main_1: nn.Linear({w.shape[1]}, {w.shape[0]})")
 
-    def forward(self, input_ids, attention_mask):
-        outputs = self.base_model(input_ids=input_ids, attention_mask=attention_mask)
+    def encode_journal(self, journal_input_ids, journal_attention_mask):
+        outputs = self.base_model(input_ids=journal_input_ids, attention_mask=journal_attention_mask)
         token_embeddings = outputs[0]
-        input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-        embedding = torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
-        
-        if self.linear1_1 is not None:
-            embedding = self.linear1_1(embedding)
-            embedding = torch.relu(embedding)
+        mask_expanded = journal_attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+        emb = torch.sum(token_embeddings * mask_expanded, 1) / torch.clamp(mask_expanded.sum(1), min=1e-9)
         if self.linear2_1 is not None:
-            embedding = self.linear2_1(embedding)
-            embedding = torch.relu(embedding)
-        if self.linear_main_1 is not None:
-            logits = self.linear_main_1(embedding)
-            return logits
-        return embedding
+            emb = self.linear2_1(emb)
+            emb = torch.relu(emb)
+        return emb
 
-def get_embedding(model, tokenizer, text, device):
-    inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
-    with torch.no_grad():
-        outputs = model(inputs['input_ids'], inputs['attention_mask'])
-    return outputs.cpu().numpy()[0]
+    def forward(self, paper_input_ids, paper_attention_mask, journal_proj_embeddings=None):
+        # 1. Encode Paper through BioBERT base
+        paper_outputs = self.base_model(input_ids=paper_input_ids, attention_mask=paper_attention_mask)
+        paper_token_embeddings = paper_outputs[0]
+        paper_mask_expanded = paper_attention_mask.unsqueeze(-1).expand(paper_token_embeddings.size()).float()
+        paper_emb = torch.sum(paper_token_embeddings * paper_mask_expanded, 1) / torch.clamp(paper_mask_expanded.sum(1), min=1e-9)
+        
+        # 2. Project Paper embedding to 512
+        if self.linear1_1 is not None:
+            paper_proj = self.linear1_1(paper_emb)
+            paper_proj = torch.relu(paper_proj)
+        else:
+            paper_proj = paper_emb
+            
+        # 3. Concatenate and predict if in classification mode (dual-branch similarity-based classifier)
+        if journal_proj_embeddings is not None and self.linear_main_1 is not None:
+            # Normalize projected embeddings for cosine similarity
+            paper_proj_norm = paper_proj / torch.clamp(paper_proj.norm(dim=-1, keepdim=True), min=1e-9)
+            journal_proj_norm = journal_proj_embeddings / torch.clamp(journal_proj_embeddings.norm(dim=-1, keepdim=True), min=1e-9)
+            
+            # Compute cosine similarity vector: [batch_size, 512] x [512, 1406] -> [batch_size, 1406]
+            sim_vector = torch.matmul(paper_proj_norm, journal_proj_norm.t())
+            
+            # Concatenate paper projected embedding (512) + similarity vector (1406) -> 1918
+            joint = torch.cat([paper_proj, sim_vector], dim=-1)
+            
+            # Pass through final classifier head
+            logits = self.linear_main_1(joint)
+            return logits
+            
+        return paper_proj
 
 def parse_listwise_output(output_text, num_candidates):
     ranking_line = output_text
@@ -83,7 +102,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="MedPRS journal recommendation inference.")
     parser.add_argument("--num_papers", type=int, default=20, help="Number of papers to evaluate.")
-    args, unknown = parser.parse_known_args() # use parse_known_args to be safe in notebooks
+    args, unknown = parser.parse_known_args()
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
@@ -162,7 +181,7 @@ def main():
     model.to(device)
     model.eval()
     
-    # Determine if it's a classification model (Approach C - Variant 1)
+    # Determine if it's a classification model (Approach C - Variant 2)
     is_multi_class = False
     num_classes = 0
     if model.linear_main_1 is not None:
@@ -170,25 +189,46 @@ def main():
         if num_classes > 1000:
             is_multi_class = True
             
-    print(f"Model Mode: {'Multi-Class Classification' if is_multi_class else 'Bi-Encoder Similarity'}")
+    print(f"Model Mode: {'Multi-Class Classification (Approach C Fig 6)' if is_multi_class else 'Bi-Encoder Similarity'}")
     
-    # 3. Compute Journal Embeddings in memory (Only if in Bi-Encoder similarity mode)
-    journal_embeddings = None
-    if not is_multi_class:
-        print("Computing embeddings for all 1,408 journals (this runs once)...")
-        journal_embeddings = []
+    # 3. Compute Projected Embeddings for all 1,406 journals in memory
+    journal_proj_embeddings = None
+    if is_multi_class:
+        print("Computing projected embeddings for all 1,406 journals (Approach C Branch 2)...")
+        # Initialize journal proj matrix on device
+        journal_proj_embeddings = torch.zeros((num_classes, 512), device=device)
         for idx, row in tqdm(journal_df.iterrows(), total=len(journal_df)):
             name = row['Journal']
             aims = row['Aims']
             cats = row['Categories']
-            text = f"Journal: {name}\nAims: {aims}\nCategories: {cats}"
+            lbl = int(row['Label'])
             
-            # In bi-encoder mode, SimCPSRModel forward pass returns the embedding
-            emb = get_embedding(model, biobert_tokenizer, text, device)
-            journal_embeddings.append(emb)
+            # Format exactly matching Table 1 of the paper
+            text = f"Journal Name: {name}\nAims and Scope: {aims}\nCategories: {cats}"
             
-        journal_embeddings = np.array(journal_embeddings)
-        print("Journal embeddings computed successfully in memory.")
+            inputs = biobert_tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
+            with torch.no_grad():
+                emb = model.encode_journal(inputs['input_ids'], inputs['attention_mask'])
+                
+            if 0 <= lbl < num_classes:
+                journal_proj_embeddings[lbl] = emb[0]
+        print("Journal projected embeddings computed successfully.")
+    else:
+        # Fallback to standard bi-encoder
+        print("Computing embeddings for all 1,408 journals in memory...")
+        journal_embeddings_list = []
+        for idx, row in tqdm(journal_df.iterrows(), total=len(journal_df)):
+            name = row['Journal']
+            aims = row['Aims']
+            cats = row['Categories']
+            text = f"Journal Name: {name}\nAims and Scope: {aims}\nCategories: {cats}"
+            
+            inputs = biobert_tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
+            with torch.no_grad():
+                emb = model(inputs['input_ids'], inputs['attention_mask'])
+            journal_embeddings_list.append(emb.cpu().numpy()[0])
+        journal_embeddings = np.array(journal_embeddings_list)
+        print("Journal embeddings computed successfully.")
             
     # 4. Load Llama 3.1 8B Listwise Reranker in 4-bit (VRAM optimized)
     print("Loading Llama 3.1 8B Listwise Reranker...")
@@ -237,28 +277,30 @@ def main():
         correct_journal_info = label_to_journal.get(correct_label, {"name": "Unknown", "aims": "", "categories": ""})
         correct_journal_name = correct_journal_info["name"]
         
-        # Paper text formatting matching standard TAK
-        paper_text = f"{title} {abstract} {keywords}"
+        # Paper text formatting matching standard TAK (Table 1 of paper)
+        paper_text = f"Title: {title}\nAbstract: {abstract}\nKeywords: {keywords}"
         
         # Calculate pointwise candidate scores
         if is_multi_class:
             inputs = biobert_tokenizer(paper_text, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
             with torch.no_grad():
-                logits = model(inputs['input_ids'], inputs['attention_mask'])
+                logits = model(inputs['input_ids'], inputs['attention_mask'], journal_proj_embeddings=journal_proj_embeddings)
             logits = logits.cpu().numpy()[0]
             
             scores = []
             for idx, r in journal_df.iterrows():
                 try:
                     lbl = int(r['Label'])
-                    if lbl < len(logits):
+                    if 0 <= lbl < len(logits):
                         scores.append(logits[lbl])
                     else:
                         scores.append(-9999.0)
                 except Exception:
                     scores.append(-9999.0)
         else:
-            paper_emb = get_embedding(model, biobert_tokenizer, paper_text, device)
+            inputs = biobert_tokenizer(paper_text, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
+            with torch.no_grad():
+                paper_emb = model(inputs['input_ids'], inputs['attention_mask']).cpu().numpy()[0]
             scores = []
             for j_emb in journal_embeddings:
                 sim = np.dot(paper_emb, j_emb) / (np.linalg.norm(paper_emb) * np.linalg.norm(j_emb))
