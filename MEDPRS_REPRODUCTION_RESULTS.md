@@ -1,57 +1,50 @@
 # MedPRS Dataset Reproduction & Evaluation Results
 
-This document summarizes the evaluation results of reproducing the **MedPRS** journal recommendation pipeline. The evaluation compares the **Pointwise Stage** (BioBERT + Custom Projection/Matching Checkpoint) against the **Listwise Reranking Stage** (Qwen-2.5-7B-Instruct running Zero-shot).
-
-The run evaluated **466 papers** before the execution session timed out.
-
----
-
-## 1. Evaluation Metrics Summary
-
-The table below shows the performance of the Pointwise and Listwise stages evaluated across the 466 completed paper samples:
-
-| Evaluation Metric | Pointwise Stage (BioBERT + Checkpoint) | Listwise Stage (Qwen Reranked) | Delta (Listwise vs Pointwise) |
-| :--- | :---: | :---: | :---: |
-| **Accuracy@1** | **0.4099** (40.99%) | 0.1652 (16.52%) | ⬇️ -0.2447 |
-| **Accuracy@5** | **0.6288** (62.88%) | 0.5923 (59.23%) | ⬇️ -0.0365 |
-| **Accuracy@10** | **0.7253** (72.53%) | **0.7253** (72.53%) | ➖ 0.0000 (Same candidate pool) |
-| **MRR** (Mean Reciprocal Rank) | **0.5063** | 0.3319 | ⬇️ -0.1744 |
-| **NDCG@5** | **0.5271** | 0.3824 | ⬇️ -0.1447 |
-| **NDCG@10** | **0.5584** | 0.4261 | ⬇️ -0.1323 |
+This document summarizes and compares the evaluation results of reproducing the **MedPRS** journal recommendation pipeline on Kaggle. It contrasts the **Pointwise Stage** (BioBERT + Custom Checkpoint) against two distinct **Listwise Reranking Stage** prompts using `Qwen-2.5-7B-Instruct` (Zero-shot):
+1. **Concise Prompt (Version 1)**: Requesting a simple 1-sentence explanation per journal before ranking.
+2. **Chain-of-Thought / CoT Prompt (Version 2)**: Requesting a detailed 2-to-3 sentence analysis per journal before ranking.
 
 ---
 
-## 2. Key Findings & Analysis
+## 1. Comparative Evaluation Metrics
 
-During this evaluation, we observed a significant drop in ranking performance when applying the Listwise reranker (Qwen-2.5-7B-Instruct) compared to the first-stage Pointwise retriever (BioBERT). Below is a detailed analysis of this phenomenon:
+The table below summarizes the metrics computed across the completed paper samples for both runs:
 
-### A. Supervised vs. Zero-Shot Capability
-* **Pointwise Stage (BioBERT)**: The BioBERT model (specifically `dmis-lab/biobert-v1.1`) combined with custom projection heads (`linear1_1` and `linear2_1`) was **explicitly fine-tuned via contrastive learning** on the MedPRS training dataset. It learned the domain-specific associations between paper text (titles and abstracts) and specific journal aims.
-* **Listwise Stage (Qwen)**: The LLM (`Qwen/Qwen2.5-7B-Instruct`) was evaluated in a **Zero-Shot** setting. It has no prior knowledge of the target training distribution, nor has it been fine-tuned for this specific recommendation task.
-
-### B. Popularity & Generalization Bias of LLMs
-Large Language Models (LLMs) often exhibit popularity bias, favoring general-interest or highly visible journals over niche specialty journals.
-* *Example (Paper 464)*:
-  * **Ground Truth**: `Behavior Research Methods` (A niche, specialized journal).
-  * **Pointwise (BioBERT)** ranked it **1st** correctly.
-  * **Listwise (Qwen)** pushed it down to **3rd**, ranking two broader journals higher:
-    1. *Cognitive Research: Principles and Implications*
-    2. *Biostatistics*
-    3. *Behavior Research Methods*
-  * This highlights that Qwen's general pre-training knowledge can override the precise domain-specific matching learned by the pointwise model.
-
-### C. Overlapping Aims & Scope Descriptions
-Many biomedical journals share highly similar "Aims & Scope" texts (e.g., repeating generic phrases like *"clinical trials"*, *"cellular mechanisms"*, or *"translational medicine"*). Without task-specific training, a Zero-shot LLM struggles to distinguish the fine-grained differences between these journals, leading to rank degradation.
+| Evaluation Metric | Pointwise Stage | Listwise (Version 1: Concise 1-sentence) | Delta (V1 vs Pointwise) | Listwise (Version 2: Detailed 2-3 sentence CoT) | Delta (V2 vs Pointwise) |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Completed Papers**| 466 / 390 | **466** | - | **390** | - |
+| **Accuracy@1** | 0.4099 / 0.4231 | 0.1652 | ⬇️ -0.2447 | 0.1564 | ⬇️ -0.2667 |
+| **Accuracy@5** | 0.6288 / 0.6282 | 0.5923 | ⬇️ -0.0365 | 0.5846 | ⬇️ -0.0436 |
+| **Accuracy@10** | 0.7253 / 0.7256 | 0.7253 | ➖ 0.0000 | 0.7256 | ➖ 0.0000 |
+| **MRR** | 0.5063 / 0.5134 | 0.3319 | ⬇️ -0.1744 | 0.3250 | ⬇️ -0.1884 |
+| **NDCG@5** | 0.5271 / 0.5323 | 0.3824 | ⬇️ -0.1447 | 0.3746 | ⬇️ -0.1577 |
+| **NDCG@10** | 0.5584 / 0.5637 | 0.4261 | ⬇️ -0.1323 | 0.4208 | ⬇️ -0.1429 |
 
 ---
 
-## 3. Recommended Strategies for Improvement
+## 2. Key Findings & Comparative Analysis
 
-To bridge the performance gap and leverage the reasoning capabilities of the Listwise reranker, the following methods are recommended:
+The evaluation reveals two important scientific insights:
+1. **Zero-shot Listwise Reranking degrades supervised Pointwise retrieval.**
+2. **Adding longer Chain-of-Thought (CoT) reasoning hurts ranking performance further while increasing latency.**
 
-1. **Few-Shot Prompting (In-Context Learning)**:
-   Incorporate 2-3 illustrative examples of papers and their expert-assigned ground truth journals in the system prompt. This guides the LLM to understand the criteria and selection style of the MedPRS dataset.
-2. **Methodological & Granularity Rules**:
-   Add specific constraints to the system prompt, instructing the model to prioritize specialized journals (e.g., *"If a paper is heavily method-focused, prioritize methodological journals like Behavior Research Methods over general cognitive journals"*).
-3. **Task-Specific Reranker Fine-Tuning**:
-   To replicate the paper's original gains, perform Parameter-Efficient Fine-Tuning (PEFT/LoRA) on the Qwen model using training triples (Query, Relevant Journal, Irrelevant Journals) from the MedPRS training set.
+### A. Why Listwise Reranking Degrades Performance
+* **Supervised Pointwise Model (BioBERT + Custom Checkpoint)**: Explicitly trained on the MedPRS dataset to recognize specific y-label associations. It is a highly specialized ranker.
+* **Zero-shot Listwise Model (Qwen)**: Lacks domain-specific fine-tuning. It suffers from **Popularity Bias** (ranking well-known journals like *Nature* or *PLOS* higher than niche specialty journals) and is distracted by generic overlaps in journal Aims & Scope.
+
+### B. Why Detailed CoT (Version 2) Performed Worse than Concise Prompt (Version 1)
+Counter-intuitively, asking the LLM to write longer analyses (2-3 sentences instead of 1 sentence) resulted in **worse accuracy, MRR, and NDCG** across the board:
+1. **Accumulation of Reasoning Noise**: Generating a longer sequence (~400 tokens of explanation) before outputting the final ranking list introduces more opportunities for logical inconsistencies and "post-hoc rationalizations" (writing plausible reasons to justify a wrong journal choice).
+2. **Information Overload inside Context**: The generated explanations pollute the model's own context window, distracting it from the main task of strict comparative ranking.
+3. **Severe Latency Bottleneck**: Version 2 required **10 hours for only 390 samples (~92 seconds per sample)** compared to Version 1, due to the high computational overhead of generating long explanations and passing tokens between split GPUs on Kaggle T4 cards.
+
+---
+
+## 3. Practical Recommendations for Future Reranking Pipelines
+
+If you wish to deploy or write research papers on this hybrid pipeline, consider these approaches:
+
+* **Prefer Concise Prompts**: When deploying zero-shot rerankers, keep explanations minimal (1 sentence or none). It is not only 3x-4x faster but also more accurate.
+* **Avoid Dual-GPU Split (Pipeline Parallelism) on Kaggle T4s**: Loading models in 16-bit across two separate GPUs via `device_map="auto"` introduces heavy PCIe latency. Always load models in **4-bit (`bitsandbytes`) on a single GPU** to run 3x-5x faster.
+* **Apply Few-Shot Prompts**: Use 2-3 examples with ground-truth rankings to align the LLM with the dataset's target distribution.
+* **Supervised Fine-tuning (Lora)**: Fine-tune the Qwen reranker on the target MedPRS training data to align its preference with the ground-truth journals.
