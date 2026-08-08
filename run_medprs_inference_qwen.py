@@ -65,6 +65,18 @@ class SimCPSRModel(nn.Module):
             
         return paper_proj
 
+def calculate_ndcg_at_k(candidates, correct_label, k):
+    for i in range(min(len(candidates), k)):
+        if candidates[i] == correct_label:
+            return 1.0 / np.log2(i + 2)
+    return 0.0
+
+def calculate_mrr(candidates, correct_label):
+    for i in range(len(candidates)):
+        if candidates[i] == correct_label:
+            return 1.0 / (i + 1)
+    return 0.0
+
 def parse_listwise_output(output_text, num_candidates):
     ranking_line = output_text
     for line in reversed(output_text.split('\n')):
@@ -252,10 +264,16 @@ def main():
     pointwise_top1_hits = 0
     pointwise_top5_hits = 0
     pointwise_top10_hits = 0
+    pointwise_mrr_sum = 0.0
+    pointwise_ndcg5_sum = 0.0
+    pointwise_ndcg10_sum = 0.0
     
     listwise_top1_hits = 0
     listwise_top5_hits = 0
     listwise_top10_hits = 0
+    listwise_mrr_sum = 0.0
+    listwise_ndcg5_sum = 0.0
+    listwise_ndcg10_sum = 0.0
     
     results_log = []
     
@@ -319,6 +337,9 @@ def main():
             pointwise_top5_hits += 1
         if correct_label in pointwise_labels[:10]:
             pointwise_top10_hits += 1
+        pointwise_mrr_sum += calculate_mrr(pointwise_labels, correct_label)
+        pointwise_ndcg5_sum += calculate_ndcg_at_k(pointwise_labels, correct_label, 5)
+        pointwise_ndcg10_sum += calculate_ndcg_at_k(pointwise_labels, correct_label, 10)
             
         # 6. Construct Listwise Prompt for Qwen
         SYSTEM_PROMPT = (
@@ -375,6 +396,9 @@ def main():
             listwise_top5_hits += 1
         if correct_label in listwise_labels[:10]:
             listwise_top10_hits += 1
+        listwise_mrr_sum += calculate_mrr(listwise_labels, correct_label)
+        listwise_ndcg5_sum += calculate_ndcg_at_k(listwise_labels, correct_label, 5)
+        listwise_ndcg10_sum += calculate_ndcg_at_k(listwise_labels, correct_label, 10)
             
         print(f"\n--- Paper {i+1} ---")
         print(f"Title: {title[:80]}...")
@@ -413,10 +437,16 @@ def main():
     p_acc1 = pointwise_top1_hits / num_eval_papers
     p_acc5 = pointwise_top5_hits / num_eval_papers
     p_acc10 = pointwise_top10_hits / num_eval_papers
+    p_mrr = pointwise_mrr_sum / num_eval_papers
+    p_ndcg5 = pointwise_ndcg5_sum / num_eval_papers
+    p_ndcg10 = pointwise_ndcg10_sum / num_eval_papers
     
     l_acc1 = listwise_top1_hits / num_eval_papers
     l_acc5 = listwise_top5_hits / num_eval_papers
     l_acc10 = listwise_top10_hits / num_eval_papers
+    l_mrr = listwise_mrr_sum / num_eval_papers
+    l_ndcg5 = listwise_ndcg5_sum / num_eval_papers
+    l_ndcg10 = listwise_ndcg10_sum / num_eval_papers
     
     print("\n================ EVALUATION SUMMARY ================")
     print(f"Total Papers Evaluated: {num_eval_papers}")
@@ -424,10 +454,16 @@ def main():
     print(f"  Accuracy@1:  {p_acc1:.4f}")
     print(f"  Accuracy@5:  {p_acc5:.4f}")
     print(f"  Accuracy@10: {p_acc10:.4f}")
+    print(f"  MRR:         {p_mrr:.4f}")
+    print(f"  NDCG@5:      {p_ndcg5:.4f}")
+    print(f"  NDCG@10:     {p_ndcg10:.4f}")
     print(f"Listwise Stage (Qwen Reranked):")
     print(f"  Accuracy@1:  {l_acc1:.4f}")
     print(f"  Accuracy@5:  {l_acc5:.4f}")
     print(f"  Accuracy@10: {l_acc10:.4f}")
+    print(f"  MRR:         {l_mrr:.4f}")
+    print(f"  NDCG@5:      {l_ndcg5:.4f}")
+    print(f"  NDCG@10:     {l_ndcg10:.4f}")
     print("====================================================")
     
     # Save log to local results folder
@@ -442,11 +478,17 @@ def main():
         f.write(f"Pointwise Stage (BioBERT):\n")
         f.write(f"  Accuracy@1:  {p_acc1:.4f}\n")
         f.write(f"  Accuracy@5:  {p_acc5:.4f}\n")
-        f.write(f"  Accuracy@10: {p_acc10:.4f}\n\n")
+        f.write(f"  Accuracy@10: {p_acc10:.4f}\n")
+        f.write(f"  MRR:         {p_mrr:.4f}\n")
+        f.write(f"  NDCG@5:      {p_ndcg5:.4f}\n")
+        f.write(f"  NDCG@10:     {p_ndcg10:.4f}\n\n")
         f.write(f"Listwise Stage (Qwen Reranked):\n")
         f.write(f"  Accuracy@1:  {l_acc1:.4f}\n")
         f.write(f"  Accuracy@5:  {l_acc5:.4f}\n")
         f.write(f"  Accuracy@10: {l_acc10:.4f}\n")
+        f.write(f"  MRR:         {l_mrr:.4f}\n")
+        f.write(f"  NDCG@5:      {l_ndcg5:.4f}\n")
+        f.write(f"  NDCG@10:     {l_ndcg10:.4f}\n")
     print(f"Results and summary saved locally to {output_dir}/")
     
     # CRITICAL KAGGLING COPIER: Save results out to /kaggle/working/ to survive Git repo exclusions
