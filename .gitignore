@@ -43,5 +43,8 @@ TEMP_TEST.py
 # MedPRS large data & checkpoints
 *.pth
 data_MedPRS/
+medprs.log
+scratch/
+
 
 
