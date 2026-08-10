@@ -8,7 +8,8 @@ import shutil
 import math
 from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
-from transformers import AutoTokenizer, AutoModel, AutoModelForSequenceClassification, AdamW
+from transformers import AutoTokenizer, AutoModel, AutoModelForSequenceClassification
+from torch.optim import AdamW
 
 def find_offline_model(default_name, search_pattern):
     local_path = os.path.basename(default_name)
