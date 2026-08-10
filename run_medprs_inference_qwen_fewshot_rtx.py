@@ -19,12 +19,10 @@ def find_offline_model(default_name, search_pattern):
     kaggle_input = "/kaggle/input"
     if os.path.exists(kaggle_input):
         for root, dirs, files in os.walk(kaggle_input):
-            for d in dirs:
-                if search_pattern.lower() in d.lower():
-                    cand_path = os.path.join(root, d)
-                    if os.path.exists(os.path.join(cand_path, "config.json")):
-                        print(f"Automatically detected Kaggle offline model path: {cand_path}")
-                        return cand_path
+            if "config.json" in files:
+                if search_pattern.lower() in root.lower():
+                    print(f"Automatically detected Kaggle offline model path: {root}")
+                    return root
                          
     print(f"Offline model not found for pattern '{search_pattern}'. Falling back to online: {default_name}")
     return default_name
