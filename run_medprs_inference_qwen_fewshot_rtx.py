@@ -160,7 +160,11 @@ def main():
     
     # 2. Load BioBERT Model and Checkpoint
     print("Loading BioBERT tokenizer and base model...")
-    biobert_model_name = "dmis-lab/biobert-v1.1"
+    # Offline model path options (uncomment the one that matches your environment)
+    biobert_model_name = "biobert-v1.1" # Local offline folder in DeAR-Reranking/
+    # biobert_model_name = "/kaggle/input/biobert-v1-1-offline" # Kaggle offline dataset path
+    # biobert_model_name = "dmis-lab/biobert-v1.1" # Online Hugging Face path
+    
     biobert_tokenizer = AutoTokenizer.from_pretrained(biobert_model_name)
     biobert_base = AutoModel.from_pretrained(biobert_model_name)
     
@@ -235,7 +239,10 @@ def main():
             
     # 4. Load Qwen 2.5 7B Instruct Model in Native 16-bit (RTX 6000 supports bfloat16 directly)
     print("Loading Qwen-2.5-7B-Instruct Model in native bfloat16...")
-    qwen_repo = "Qwen/Qwen2.5-7B-Instruct"
+    # Offline model path options (uncomment the one that matches your environment)
+    qwen_repo = "Qwen/Qwen2.5-7B-Instruct" # Online Hugging Face path
+    # qwen_repo = "/kaggle/input/qwen-2.5-7b-instruct/transformers/default/1" # Kaggle offline model path
+    
     qwen_tokenizer = AutoTokenizer.from_pretrained(qwen_repo, use_fast=True)
     
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
