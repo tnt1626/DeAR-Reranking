@@ -255,7 +255,7 @@ def main():
     print("Loading Qwen-2.5-7B-Instruct Model in native bfloat16...")
     qwen_repo = find_offline_model("Qwen/Qwen2.5-7B-Instruct", "qwen")
     
-    qwen_tokenizer = AutoTokenizer.from_pretrained(qwen_repo, use_fast=True)
+    qwen_tokenizer = AutoTokenizer.from_pretrained(qwen_repo, use_fast=True, trust_remote_code=True)
     
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     
