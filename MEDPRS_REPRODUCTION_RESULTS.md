@@ -1,50 +1,61 @@
 # MedPRS Dataset Reproduction & Evaluation Results
 
-This document summarizes and compares the evaluation results of reproducing the **MedPRS** journal recommendation pipeline on Kaggle. It contrasts the **Pointwise Stage** (BioBERT + Custom Checkpoint) against two distinct **Listwise Reranking Stage** prompts using `Qwen-2.5-7B-Instruct` (Zero-shot):
-1. **Concise Prompt (Version 1)**: Requesting a simple 1-sentence explanation per journal before ranking.
-2. **Chain-of-Thought / CoT Prompt (Version 2)**: Requesting a detailed 2-to-3 sentence analysis per journal before ranking.
+This document summarizes and compares the evaluation results of reproducing the **MedPRS** journal recommendation pipeline on Kaggle. It compares the **Pointwise Stage** (BioBERT + Custom Checkpoint) against three distinct **Listwise Reranking Stage** prompt setups using `Qwen-2.5-7B-Instruct`:
+1. **Version 1 (Concise Zero-shot)**: Requesting a simple 1-sentence explanation per journal before ranking (Zero-shot).
+2. **Version 2 (CoT Zero-shot)**: Requesting a detailed 2-to-3 sentence analysis per journal before ranking (Zero-shot).
+3. **Version 3 (Few-shot Example-guided)**: Incorporating 2 representative few-shot examples with reasoning and rankings to guide the model (Few-shot).
 
 ---
 
 ## 1. Comparative Evaluation Metrics
 
-The table below summarizes the metrics computed across the completed paper samples for both runs:
+The table below summarizes the metrics computed across the completed paper samples for all three versions. Since the test runs completed different numbers of samples due to Kaggle session time limits, each Listwise version is compared against its corresponding Pointwise baseline calculated on the exact same subset of papers:
 
-| Evaluation Metric | Pointwise Stage | Listwise (Version 1: Concise 1-sentence) | Delta (V1 vs Pointwise) | Listwise (Version 2: Detailed 2-3 sentence CoT) | Delta (V2 vs Pointwise) |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Completed Papers**| 466 / 390 | **466** | - | **390** | - |
-| **Accuracy@1** | 0.4099 / 0.4231 | 0.1652 | ⬇️ -0.2447 | 0.1564 | ⬇️ -0.2667 |
-| **Accuracy@5** | 0.6288 / 0.6282 | 0.5923 | ⬇️ -0.0365 | 0.5846 | ⬇️ -0.0436 |
-| **Accuracy@10** | 0.7253 / 0.7256 | 0.7253 | ➖ 0.0000 | 0.7256 | ➖ 0.0000 |
-| **MRR** | 0.5063 / 0.5134 | 0.3319 | ⬇️ -0.1744 | 0.3250 | ⬇️ -0.1884 |
-| **NDCG@5** | 0.5271 / 0.5323 | 0.3824 | ⬇️ -0.1447 | 0.3746 | ⬇️ -0.1577 |
-| **NDCG@10** | 0.5584 / 0.5637 | 0.4261 | ⬇️ -0.1323 | 0.4208 | ⬇️ -0.1429 |
+| Evaluation Metric | V1 (Concise Zero-shot) [466 papers] | V2 (CoT Zero-shot) [390 papers] | V3 (Few-shot) [200 papers] |
+| :--- | :---: | :---: | :---: |
+| **Pointwise Acc@1** | 0.4099 | 0.4231 | 0.4800 |
+| **Listwise Acc@1** | 0.1652 | 0.1564 | **0.3750** |
+| *Acc@1 Delta* | *⬇️ -0.2447 (-59.7%)* | *⬇️ -0.2667 (-63.0%)* | ***⬇️ -0.1050 (-21.8%)*** |
+| | | | |
+| **Pointwise Acc@5** | 0.6288 | 0.6282 | 0.7400 |
+| **Listwise Acc@5** | 0.5923 | 0.5846 | **0.7050** |
+| *Acc@5 Delta* | *⬇️ -0.0365 (-5.8%)* | *⬇️ -0.0436 (-6.9%)* | ***⬇️ -0.0350 (-4.7%)*** |
+| | | | |
+| **Pointwise MRR** | 0.5063 | 0.5134 | 0.5926 |
+| **Listwise MRR** | 0.3319 | 0.3250 | **0.5065** |
+| *MRR Delta* | *⬇️ -0.1744 (-34.4%)* | *⬇️ -0.1884 (-36.7%)* | ***⬇️ -0.0861 (-14.5%)*** |
+| | | | |
+| **Pointwise NDCG@10**| 0.5584 | 0.5637 | 0.6496 |
+| **Listwise NDCG@10**| 0.4261 | 0.4208 | **0.5836** |
+| *NDCG@10 Delta* | *⬇️ -0.1323 (-23.7%)* | *⬇️ -0.1429 (-25.3%)* | ***⬇️ -0.0660 (-10.1%)*** |
 
 ---
 
 ## 2. Key Findings & Comparative Analysis
 
-The evaluation reveals two important scientific insights:
-1. **Zero-shot Listwise Reranking degrades supervised Pointwise retrieval.**
-2. **Adding longer Chain-of-Thought (CoT) reasoning hurts ranking performance further while increasing latency.**
+Comparing the three versions reveals major scientific insights into how prompting strategies affect LLM-based reranking performance:
 
-### A. Why Listwise Reranking Degrades Performance
-* **Supervised Pointwise Model (BioBERT + Custom Checkpoint)**: Explicitly trained on the MedPRS dataset to recognize specific y-label associations. It is a highly specialized ranker.
-* **Zero-shot Listwise Model (Qwen)**: Lacks domain-specific fine-tuning. It suffers from **Popularity Bias** (ranking well-known journals like *Nature* or *PLOS* higher than niche specialty journals) and is distracted by generic overlaps in journal Aims & Scope.
+### A. Few-shot Prompting (V3) Halves the Performance Drop
+* **The Zero-shot Challenge (V1 and V2)**: In Zero-shot mode, Qwen suffered a catastrophic drop in performance compared to the supervised Pointwise baseline (e.g., a **-59.7%** drop in Acc@1). This was due to popularity bias (favoring famous journals like *Nature* or *PLOS*) and a lack of task-specific alignment.
+* **The Few-shot Solution (V3)**: By introducing just 2 representative examples of papers and their expert-assigned journals, Qwen's performance drop was **cut in half** (e.g., the Acc@1 drop was reduced to **-21.8%**, and the NDCG@10 drop was reduced from **-23.7%** to just **-10.1%**). 
+* **Mechanism**: In-context examples successfully align the model's judgment with the target dataset's distribution, helping Qwen prioritize domain specificity over general popularity bias.
 
-### B. Why Detailed CoT (Version 2) Performed Worse than Concise Prompt (Version 1)
-Counter-intuitively, asking the LLM to write longer analyses (2-3 sentences instead of 1 sentence) resulted in **worse accuracy, MRR, and NDCG** across the board:
-1. **Accumulation of Reasoning Noise**: Generating a longer sequence (~400 tokens of explanation) before outputting the final ranking list introduces more opportunities for logical inconsistencies and "post-hoc rationalizations" (writing plausible reasons to justify a wrong journal choice).
-2. **Information Overload inside Context**: The generated explanations pollute the model's own context window, distracting it from the main task of strict comparative ranking.
-3. **Severe Latency Bottleneck**: Version 2 required **10 hours for only 390 samples (~92 seconds per sample)** compared to Version 1, due to the high computational overhead of generating long explanations and passing tokens between split GPUs on Kaggle T4 cards.
+### B. Long-chain Reasoning (V2) Degrades Performance
+* Asking Qwen to generate detailed 2-to-3 sentence explanations (V2) instead of a single concise sentence (V1) resulted in worse performance across all metrics.
+* Long-form generation introduces **reasoning noise** and post-hoc rationalizations, which clutter the self-attention context and distract the model from the comparative ranking task.
+
+### C. The Truncation Issue: Example Length Mismatch
+During log analysis, we identified a critical prompting issue in Version 3:
+* **Symptom**: In several papers (e.g., Papers 199 and 200), Qwen only ranked 3 or 4 candidates in its final list (e.g., `[1] > [2] > [0]`), leaving the remaining 6-7 candidates unranked.
+* **Cause**: The 2 few-shot examples in the prompt only had **3 candidate journals** in their context. Qwen mimicked this format and truncated its active rankings to 3-4 items, even though the active query provided **10 candidate journals**.
+* **Impact**: The unranked items were appended in their default pointwise order, limiting Qwen's ability to rerank the bottom positions and artificially capping the potential few-shot gains.
 
 ---
 
-## 3. Practical Recommendations for Future Reranking Pipelines
+## 3. Practical Recommendations for Next-Stage Optimization
 
-If you wish to deploy or write research papers on this hybrid pipeline, consider these approaches:
+To fully close the performance gap and surpass the Pointwise baseline, future runs should implement:
 
-* **Prefer Concise Prompts**: When deploying zero-shot rerankers, keep explanations minimal (1 sentence or none). It is not only 3x-4x faster but also more accurate.
-* **Avoid Dual-GPU Split (Pipeline Parallelism) on Kaggle T4s**: Loading models in 16-bit across two separate GPUs via `device_map="auto"` introduces heavy PCIe latency. Always load models in **4-bit (`bitsandbytes`) on a single GPU** to run 3x-5x faster.
-* **Apply Few-Shot Prompts**: Use 2-3 examples with ground-truth rankings to align the LLM with the dataset's target distribution.
-* **Supervised Fine-tuning (Lora)**: Fine-tune the Qwen reranker on the target MedPRS training data to align its preference with the ground-truth journals.
+1. **Match Candidate Count in Few-shot Examples**: Rewrite the few-shot examples to contain exactly **10 candidates** and rank all 10 candidates. This will guide Qwen to output complete 10-element rankings without truncation.
+2. **Quantized Single-GPU Inference**: Continue using the single-GPU RTX 6000 setup in 16-bit precision, which runs **5x-8x faster** than split-GPU T4 pipeline parallelism and avoids inter-GPU PCIe transfer bottlenecks.
+3. **Supervised Fine-Tuning (SFT)**: If maximum accuracy is required, perform LoRA fine-tuning on Qwen using target preference rankings from the MedPRS train set to fully align the model's weights.

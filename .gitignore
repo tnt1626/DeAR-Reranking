@@ -45,6 +45,10 @@ TEMP_TEST.py
 data_MedPRS/
 medprs.log
 medprs_cot.log
+biobert-v1.1/
+few-shot-log.txt
+medprs_fewshot_results.json
+medprs_fewshot_summary.txt
 scratch/
 
 
