@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import shutil
 import math
+import random
 from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModel, AutoModelForSequenceClassification
@@ -155,6 +156,53 @@ def main():
     
     print(f"Loaded {len(journal_df)} journals, {len(train_df)} training papers, and {len(val_df)} validation papers.")
     
+    # Load tokenizers and models first
+    biobert_model_name = find_offline_model("dmis-lab/biobert-v1.1", "biobert")
+    tokenizer = AutoTokenizer.from_pretrained(biobert_model_name)
+    biobert_base = AutoModel.from_pretrained(biobert_model_name)
+    
+    print(f"Loading pointwise checkpoint weights from {checkpoint_path} for embedding computation...")
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    state_dict = checkpoint.get("model_state_dict", checkpoint)
+    
+    pointwise_model = SimCPSRModel(biobert_base)
+    pointwise_model.init_heads(state_dict)
+    
+    clean_state_dict = {}
+    for k, v in state_dict.items():
+        name = k
+        if name.startswith("model_state_dict."):
+            name = name[17:]
+        if name.startswith("model."):
+            name = name[6:]
+        if name.startswith("base_model.bert."):
+            name = "base_model." + name[16:]
+        clean_state_dict[name] = v
+        
+    pointwise_model.load_state_dict(clean_state_dict, strict=False)
+    pointwise_model.to(device)
+    pointwise_model.eval()
+    
+    is_multi_class = pointwise_model.linear_main_1.out_features > 1000
+    
+    # Pre-compute journal embeddings
+    print("Computing pointwise journal embeddings...")
+    journal_proj_embeddings = torch.zeros((pointwise_model.linear_main_1.out_features, 512), device=device)
+    journal_info = {}
+    for idx, row in journal_df.iterrows():
+        name = row['Journal']
+        aims = row['Aims']
+        cats = row['Categories']
+        lbl = int(row['Label'])
+        text = f"Journal Name: {name}\nAims and Scope: {aims}\nCategories: {cats}"
+        journal_info[lbl] = text
+        
+        inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
+        with torch.no_grad():
+            emb = pointwise_model.encode_journal(inputs['input_ids'], inputs['attention_mask'])
+        if 0 <= lbl < len(journal_proj_embeddings):
+            journal_proj_embeddings[lbl] = emb[0]
+            
     # 1. Stratified Sub-sampling on Training Data
     print(f"Performing stratified sampling (max {args.samples_per_label} papers per label)...")
     train_sampled = train_df.groupby('Label').apply(
@@ -162,16 +210,11 @@ def main():
     ).reset_index(drop=True)
     print(f"Sampled training size: {len(train_sampled)} papers.")
     
-    # 2. Construct Positive & Negative Pairs for Cross-Encoder
-    journal_info = {}
-    journal_labels = []
-    for idx, row in journal_df.iterrows():
-        lbl = int(row['Label'])
-        journal_labels.append(lbl)
-        journal_info[lbl] = f"Journal Name: {row['Journal']}\nAims and Scope: {row['Aims']}\nCategories: {row['Categories']}"
-        
-    print("Constructing positive and negative training pairs...")
+    # 2. Construct Positive & Hard Negative Pairs using Pointwise Scores
+    print("Constructing positive and hard negative training pairs (Hard Negative Mining)...")
     train_pairs = []
+    
+    # To run inference faster, batch the paper embeddings
     for idx, row in tqdm(train_sampled.iterrows(), total=len(train_sampled)):
         title = row['Title']
         abstract = row['Abstract']
@@ -180,24 +223,55 @@ def main():
         
         paper_text = f"Title: {title}\nAbstract: {abstract}\nKeywords: {keywords}"
         
+        # Get pointwise predictions for this paper to find hard negatives
+        inputs = tokenizer(paper_text, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
+        with torch.no_grad():
+            paper_emb = pointwise_model.encode_paper(inputs['input_ids'], inputs['attention_mask'])
+            logits = pointwise_model(paper_emb, journal_proj_embeddings)
+        logits = logits.cpu().numpy()[0]
+        
         # Positive pair
         if correct_lbl in journal_info:
             train_pairs.append((paper_text, journal_info[correct_lbl], 1.0))
             
-            # Negative pair (randomly choose an incorrect journal)
-            wrong_lbl = correct_lbl
-            while wrong_lbl == correct_lbl:
-                wrong_lbl = random.choice(journal_labels)
-            train_pairs.append((paper_text, journal_info[wrong_lbl], 0.0))
+            # Sort journals by score
+            scores = []
+            for j_lbl, j_text in journal_info.items():
+                if j_lbl != correct_lbl:
+                    scores.append((j_lbl, logits[j_lbl] if 0 <= j_lbl < len(logits) else -9999.0))
+            scores.sort(key=lambda x: x[1], reverse=True)
             
-    print(f"Total training pairs: {len(train_pairs)} (50% positive, 50% negative).")
+            # Take top 2 hard negatives
+            hard_negatives = scores[:2]
+            for hn_lbl, _ in hard_negatives:
+                train_pairs.append((paper_text, journal_info[hn_lbl], 0.0))
+                
+    print(f"Total training pairs: {len(train_pairs)} (1:2 Positive-to-Negative Ratio).")
     
-    # 3. Load Model and Tokenizer
-    biobert_model_name = find_offline_model("dmis-lab/biobert-v1.1", "biobert")
-    tokenizer = AutoTokenizer.from_pretrained(biobert_model_name)
-    
+    # 3. Load Cross-Encoder and WARM-START Backbone weights
     print("Initializing Cross-Encoder model...")
     cross_encoder = AutoModelForSequenceClassification.from_pretrained(biobert_model_name, num_labels=1)
+    
+    # Warm-start backbone using pointwise BERT weights
+    print("Warm-starting Cross-Encoder backbone from Pointwise checkpoint...")
+    backbone_state_dict = {}
+    for k, v in state_dict.items():
+        if "base_model.bert" in k or "base_model" in k or "bert" in k:
+            name = k
+            if "base_model.bert." in name:
+                name = name.split("base_model.bert.")[1]
+            elif "base_model." in name:
+                name = name.split("base_model.")[1]
+            elif "model.bert." in name:
+                name = name.split("model.bert.")[1]
+            elif "bert." in name:
+                name = name.split("bert.")[1]
+            bert_key = f"bert.{name}"
+            backbone_state_dict[bert_key] = v
+            
+    info = cross_encoder.load_state_dict(backbone_state_dict, strict=False)
+    print(f"Backbone Warm-start Report: Matched {len(backbone_state_dict)} keys. Missing keys: {len(info.missing_keys)}")
+    
     cross_encoder.to(device)
     
     # 4. Prepare PyTorch DataLoader
@@ -252,46 +326,6 @@ def main():
     # 6. Evaluation Giai Đoạn 2 (Pointwise + Cross-Encoder Rerank)
     print(f"\nEvaluating on the first {args.num_eval} validation papers...")
     
-    # Loading base pointwise model to get candidate list
-    biobert_base = AutoModel.from_pretrained(biobert_model_name)
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    state_dict = checkpoint.get("model_state_dict", checkpoint)
-    pointwise_model = SimCPSRModel(biobert_base)
-    pointwise_model.init_heads(state_dict)
-    
-    clean_state_dict = {}
-    for k, v in state_dict.items():
-        name = k
-        if name.startswith("model_state_dict."):
-            name = name[17:]
-        if name.startswith("model."):
-            name = name[6:]
-        if name.startswith("base_model.bert."):
-            name = "base_model." + name[16:]
-        clean_state_dict[name] = v
-        
-    pointwise_model.load_state_dict(clean_state_dict, strict=False)
-    pointwise_model.to(device)
-    pointwise_model.eval()
-    
-    is_multi_class = pointwise_model.linear_main_1.out_features > 1000
-    journal_proj_embeddings = None
-    
-    if is_multi_class:
-        print("Computing pointwise journal embeddings...")
-        journal_proj_embeddings = torch.zeros((pointwise_model.linear_main_1.out_features, 512), device=device)
-        for idx, row in journal_df.iterrows():
-            name = row['Journal']
-            aims = row['Aims']
-            cats = row['Categories']
-            lbl = int(row['Label'])
-            text = f"Journal Name: {name}\nAims and Scope: {aims}\nCategories: {cats}"
-            inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
-            with torch.no_grad():
-                emb = pointwise_model.encode_journal(inputs['input_ids'], inputs['attention_mask'])
-            if 0 <= lbl < len(journal_proj_embeddings):
-                journal_proj_embeddings[lbl] = emb[0]
-                
     cross_encoder.eval()
     
     p_acc1, p_acc5, p_acc10 = 0, 0, 0
@@ -299,8 +333,6 @@ def main():
     
     ce_acc1, ce_acc5, ce_acc10 = 0, 0, 0
     ce_mrr, ce_ndcg5, ce_ndcg10 = 0.0, 0.0, 0.0
-    
-    results_log = []
     
     for i in tqdm(range(args.num_eval), desc="Evaluating papers"):
         row = val_df.iloc[i]

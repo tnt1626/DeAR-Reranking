@@ -49,6 +49,7 @@ biobert-v1.1/
 few-shot-log.txt
 medprs_fewshot_results.json
 medprs_fewshot_summary.txt
+arc-agi-3.log
 scratch/
 
 
