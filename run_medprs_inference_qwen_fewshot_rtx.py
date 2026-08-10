@@ -10,6 +10,25 @@ import math
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
 
+def find_offline_model(default_name, search_pattern):
+    local_path = os.path.basename(default_name)
+    if os.path.exists(local_path) and os.path.isdir(local_path):
+        print(f"Detected offline model folder in working directory: {local_path}")
+        return local_path
+        
+    kaggle_input = "/kaggle/input"
+    if os.path.exists(kaggle_input):
+        for root, dirs, files in os.walk(kaggle_input):
+            for d in dirs:
+                if search_pattern.lower() in d.lower():
+                    cand_path = os.path.join(root, d)
+                    if os.path.exists(os.path.join(cand_path, "config.json")):
+                        print(f"Automatically detected Kaggle offline model path: {cand_path}")
+                        return cand_path
+                         
+    print(f"Offline model not found for pattern '{search_pattern}'. Falling back to online: {default_name}")
+    return default_name
+
 class SimCPSRModel(nn.Module):
     def __init__(self, base_model):
         super().__init__()
@@ -160,10 +179,7 @@ def main():
     
     # 2. Load BioBERT Model and Checkpoint
     print("Loading BioBERT tokenizer and base model...")
-    # Offline model path options (uncomment the one that matches your environment)
-    biobert_model_name = "biobert-v1.1" # Local offline folder in DeAR-Reranking/
-    # biobert_model_name = "/kaggle/input/biobert-v1-1-offline" # Kaggle offline dataset path
-    # biobert_model_name = "dmis-lab/biobert-v1.1" # Online Hugging Face path
+    biobert_model_name = find_offline_model("dmis-lab/biobert-v1.1", "biobert")
     
     biobert_tokenizer = AutoTokenizer.from_pretrained(biobert_model_name)
     biobert_base = AutoModel.from_pretrained(biobert_model_name)
@@ -239,9 +255,7 @@ def main():
             
     # 4. Load Qwen 2.5 7B Instruct Model in Native 16-bit (RTX 6000 supports bfloat16 directly)
     print("Loading Qwen-2.5-7B-Instruct Model in native bfloat16...")
-    # Offline model path options (uncomment the one that matches your environment)
-    qwen_repo = "Qwen/Qwen2.5-7B-Instruct" # Online Hugging Face path
-    # qwen_repo = "/kaggle/input/qwen-2.5-7b-instruct/transformers/default/1" # Kaggle offline model path
+    qwen_repo = find_offline_model("Qwen/Qwen2.5-7B-Instruct", "qwen")
     
     qwen_tokenizer = AutoTokenizer.from_pretrained(qwen_repo, use_fast=True)
     
